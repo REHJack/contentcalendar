@@ -47,6 +47,18 @@ var EMOJIS=["\ud83d\udd25","\u2b50","\ud83d\udca1"];
 
 var state={dark:false,yr:2026,mo:2,entries:{},search:"",filterSt:"All",filterType:"All",undoStack:[],ctx:null,drag:null,mobileWeek:0,importMsg:"",sidebarOpen:false,confirmDel:null};
 
+// LocalStorage persistence
+function saveEntries(){try{localStorage.setItem("jcc_entries",JSON.stringify(state.entries))}catch(e){console.warn("Could not save to localStorage:",e)}}
+function loadEntries(){try{var d=localStorage.getItem("jcc_entries");if(d){state.entries=JSON.parse(d)}}catch(e){console.warn("Could not load from localStorage:",e)}}
+function savePref(){try{localStorage.setItem("jcc_dark",state.dark?"1":"0")}catch(e){}}
+function loadPref(){try{var d=localStorage.getItem("jcc_dark");if(d!==null)state.dark=d==="1"}catch(e){}}
+
+// Load saved data on startup
+loadEntries();
+loadPref();
+// Set initial month to current month
+var _now=new Date();state.yr=_now.getFullYear();state.mo=_now.getMonth();
+
 function gid(){return Math.random().toString(36).slice(2,9)}
 function fmtDate(d){return d.getDate()+" "+MONTHS_S[d.getMonth()]+" "+d.getFullYear()+" at "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")}
 function dims(y,m){return new Date(y,m+1,0).getDate()}
@@ -54,7 +66,7 @@ function startD(y,m){var d=new Date(y,m,1).getDay();return d===0?6:d-1}
 function dk(y,m,d){return y+"-"+m+"-"+d}
 function ge(y,m,d){return state.entries[dk(y,m,d)]||[]}
 function snap(){state.undoStack=state.undoStack.slice(-19).concat([JSON.parse(JSON.stringify(state.entries))])}
-function undo(){if(!state.undoStack.length)return;state.entries=state.undoStack.pop();render()}
+function undo(){if(!state.undoStack.length)return;state.entries=state.undoStack.pop();saveEntries();render()}
 
 function typeBg(tp,dark){return dark?TYPE_CLR_D[tp]||TYPE_CLR_D.Misc:TYPE_CLR_L[tp]||TYPE_CLR_L.Misc}
 function typeTx(tp,dark){return dark?TYPE_CLR_DT[tp]||TYPE_CLR_DT.Misc:TYPE_CLR_LT[tp]||TYPE_CLR_LT.Misc}
@@ -67,7 +79,7 @@ function stBadgeStyle(s,t){
 }
 
 function addEntryRaw(y,m,d,e){var k=dk(y,m,d);if(!e.createdAt)e.createdAt=new Date().toISOString();if(!e.history)e.history=[];if(!e.entryType)e.entryType="Misc";state.entries[k]=(state.entries[k]||[]).concat([e])}
-function addEntry(y,m,d,e){snap();addEntryRaw(y,m,d,e);expandR(y,m,d,e);render()}
+function addEntry(y,m,d,e){snap();addEntryRaw(y,m,d,e);expandR(y,m,d,e);saveEntries();render()}
 function expandR(y,m,d,e){
   if(e.recurrence==="None")return;
   var endDt=e.recurEnd?new Date(e.recurEnd+"T23:59:59"):null;
@@ -87,10 +99,10 @@ function updateEntry(y,m,d,id,u){snap();var k=dk(y,m,d);state.entries[k]=(state.
   if(changes.length>0)updated.history=updated.history.concat([{date:new Date().toISOString(),changes:changes}]);
   updated.lastEdited=new Date().toISOString();
   return updated;
-});render()}
-function removeEntry(y,m,d,id){snap();var k=dk(y,m,d);state.entries[k]=(state.entries[k]||[]).filter(function(e){return e.id!==id});render()}
-function moveEntry(fk,tk,id){if(fk===tk)return;snap();var e=null;state.entries[fk]=(state.entries[fk]||[]).filter(function(x){if(x.id===id){e=x;return false}return true});if(e)state.entries[tk]=(state.entries[tk]||[]).concat([e]);render()}
-function toggleEmoji(y,m,d,id,em){var k=dk(y,m,d);state.entries[k]=(state.entries[k]||[]).map(function(e){if(e.id!==id)return e;var r=e.reactions||[];return Object.assign({},e,{reactions:r.indexOf(em)>=0?r.filter(function(x){return x!==em}):r.concat([em])})});render()}
+});saveEntries();render()}
+function removeEntry(y,m,d,id){snap();var k=dk(y,m,d);state.entries[k]=(state.entries[k]||[]).filter(function(e){return e.id!==id});saveEntries();render()}
+function moveEntry(fk,tk,id){if(fk===tk)return;snap();var e=null;state.entries[fk]=(state.entries[fk]||[]).filter(function(x){if(x.id===id){e=x;return false}return true});if(e)state.entries[tk]=(state.entries[tk]||[]).concat([e]);saveEntries();render()}
+function toggleEmoji(y,m,d,id,em){var k=dk(y,m,d);state.entries[k]=(state.entries[k]||[]).map(function(e){if(e.id!==id)return e;var r=e.reactions||[];return Object.assign({},e,{reactions:r.indexOf(em)>=0?r.filter(function(x){return x!==em}):r.concat([em])})});saveEntries();render()}
 
 function getTheme(){
   if(state.dark)return{bg:"#0f1117",sf:"#1a1d2e",sa:"#232738",tx:"#e2e8f0",ts:"#94a3b8",ac:"#818cf8",bd:"#2d3148",hv:"#262a40",
@@ -489,7 +501,7 @@ window.cancelDel=function(){state.confirmDel=null;render()};
 // Navigation
 window.toggleSidebar=function(){state.sidebarOpen=!state.sidebarOpen;render()};
 window.doUndo=function(){undo()};
-window.toggleDark=function(){state.dark=!state.dark;render()};
+window.toggleDark=function(){state.dark=!state.dark;savePref();render()};
 window.goToday=function(){var d=new Date();state.yr=d.getFullYear();state.mo=d.getMonth();state.mobileWeek=0;var weeks=getWeeks();for(var i=0;i<weeks.length;i++){if(weeks[i].indexOf(d.getDate())>=0){state.mobileWeek=i;break}}render()};
 window.prevMo=function(){if(state.mo===0){state.mo=11;state.yr--}else state.mo--;state.mobileWeek=0;render()};
 window.nextMo=function(){if(state.mo===11){state.mo=0;state.yr++}else state.mo++;state.mobileWeek=0;render()};
