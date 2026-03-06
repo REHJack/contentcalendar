@@ -1,0 +1,232 @@
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+
+const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+const DAYS_H=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const STATUSES=["Draft","Scheduled","Published","Meeting"];
+const ST_ICO={Draft:"✏️",Scheduled:"📅",Published:"✅",Meeting:"🤝"};
+const RECUR=["None","Weekly","Bi-weekly","Monthly"];
+const EMOJIS=["🔥","⭐","💡"];
+const gid=()=>Math.random().toString(36).slice(2,9);
+const dim=(y,m)=>new Date(y,m+1,0).getDate();
+const sd=(y,m)=>{let d=new Date(y,m,1).getDay();return d===0?6:d-1;};
+const dk=(y,m,d)=>`${y}-${m}-${d}`;
+
+const L={bg:"#f0f4ff",sf:"#ffffff",sa:"#f7f8fc",tx:"#1a1a2e",ts:"#6b7280",ac:"#6366f1",al:"#e0e7ff",bd:"#e2e5f1",hv:"#eef2ff",drB:"#fef3c7",drT:"#92400e",scB:"#dbeafe",scT:"#1e40af",puB:"#d1fae5",puT:"#065f46",mtB:"#fce7f3",mtT:"#9d174d",sh:"rgba(99,102,241,0.12)",ctB:"#ffffff",ctH:"#f3f4f6",ctD:"#e5e7eb",wk:"#e0e7ff",tB:"#6366f1",tT:"#fff",mH:"#e0e7ff",prB:"#e0e7ff",prF:"#6366f1",hm1:"rgba(99,102,241,0.08)",hm2:"rgba(99,102,241,0.18)",hm3:"rgba(99,102,241,0.32)",hm4:"rgba(99,102,241,0.5)"};
+const D={bg:"#0f1117",sf:"#1a1d2e",sa:"#232738",tx:"#e2e8f0",ts:"#94a3b8",ac:"#818cf8",al:"#312e81",bd:"#2d3148",hv:"#262a40",drB:"#422006",drT:"#fcd34d",scB:"#1e3a5f",scT:"#93c5fd",puB:"#064e3b",puT:"#6ee7b7",mtB:"#4a1942",mtT:"#f0abfc",sh:"rgba(0,0,0,0.4)",ctB:"#1e2235",ctH:"#2d3148",ctD:"#3b4063",wk:"#312e81",tB:"#818cf8",tT:"#0f1117",mH:"#312e81",prB:"#312e81",prF:"#818cf8",hm1:"rgba(129,140,248,0.08)",hm2:"rgba(129,140,248,0.18)",hm3:"rgba(129,140,248,0.32)",hm4:"rgba(129,140,248,0.5)"};
+
+const ss=(s,t)=>{if(s==="Draft")return{background:t.drB,color:t.drT};if(s==="Scheduled")return{background:t.scB,color:t.scT};if(s==="Meeting")return{background:t.mtB,color:t.mtT};return{background:t.puB,color:t.puT};};
+const hmBg=(c,t)=>c===0?"transparent":c===1?t.hm1:c===2?t.hm2:c<=4?t.hm3:t.hm4;
+
+export default function App(){
+  const[dark,setDark]=useState(false);
+  const t=dark?D:L;
+  const[yr,setYr]=useState(2026);
+  const[mo,setMo]=useState(2);
+  const[entries,setEntries]=useState({});
+  const[ctx,setCtx]=useState(null);
+  const[modal,setModal]=useState(null);
+  const[drag,setDrag]=useState(null);
+  const[hovD,setHovD]=useState(null);
+  const[hovE,setHovE]=useState(null);
+  const[hovW,setHovW]=useState(null);
+  const[search,setSearch]=useState("");
+  const[filterSt,setFilterSt]=useState("All");
+  const[undoStack,setUndoStack]=useState([]);
+  const cRef=useRef(null);
+
+  const ge=(y,m,d)=>entries[dk(y,m,d)]||[];
+
+  const snap=()=>setUndoStack(p=>[...p.slice(-19),JSON.parse(JSON.stringify(entries))]);
+  const undo=()=>{if(!undoStack.length)return;const prev=undoStack[undoStack.length-1];setEntries(prev);setUndoStack(p=>p.slice(0,-1));};
+
+  const addEntry=(y,m,d,e)=>{snap();const k=dk(y,m,d);setEntries(p=>{const n={...p,[k]:[...(p[k]||[]),e]};return expandR(n,y,m,d,e);});};
+  const expandR=(st,y,m,d,e)=>{
+    if(e.recurrence==="None")return st;
+    let ns={...st};
+    const int=e.recurrence==="Weekly"?7:e.recurrence==="Bi-weekly"?14:0;
+    if(int>0){let dt=new Date(y,m,d);for(let i=0;i<12;i++){dt=new Date(dt.getTime()+int*864e5);const k2=dk(dt.getFullYear(),dt.getMonth(),dt.getDate());ns={...ns,[k2]:[...(ns[k2]||[]),{...e,id:gid(),recurring:true}]};}}
+    else if(e.recurrence==="Monthly"){for(let i=1;i<=6;i++){let nm=m+i,ny=y;if(nm>11){nm-=12;ny++;}const md=dim(ny,nm),nd=Math.min(d,md),k2=dk(ny,nm,nd);ns={...ns,[k2]:[...(ns[k2]||[]),{...e,id:gid(),recurring:true}]};}}
+    return ns;
+  };
+  const updateEntry=(y,m,d,id,u)=>{snap();const k=dk(y,m,d);setEntries(p=>({...p,[k]:(p[k]||[]).map(e=>e.id===id?{...e,...u}:e)}));};
+  const removeEntry=(y,m,d,id)=>{snap();const k=dk(y,m,d);setEntries(p=>({...p,[k]:(p[k]||[]).filter(e=>e.id!==id)}));};
+  const moveEntry=(fk,tk,id)=>{if(fk===tk)return;snap();setEntries(p=>{const e=(p[fk]||[]).find(x=>x.id===id);if(!e)return p;return{...p,[fk]:(p[fk]||[]).filter(x=>x.id!==id),[tk]:[...(p[tk]||[]),e]};});};
+  const toggleEmoji=(y,m,d,id,em)=>{const k=dk(y,m,d);setEntries(p=>({...p,[k]:(p[k]||[]).map(e=>{if(e.id!==id)return e;const r=e.reactions||[];return{...e,reactions:r.includes(em)?r.filter(x=>x!==em):[...r,em]};})}));};
+
+  useEffect(()=>{const h=e=>{if(cRef.current&&!cRef.current.contains(e.target))setCtx(null);};document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);},[]);
+
+  const dins=dim(yr,mo),stDay=sd(yr,mo);
+  const today=new Date();
+  const isT=d=>today.getFullYear()===yr&&today.getMonth()===mo&&today.getDate()===d;
+
+  const weeks=useMemo(()=>{const w=[];let wk=[];for(let i=0;i<stDay;i++)wk.push(null);for(let d=1;d<=dins;d++){wk.push(d);if(wk.length===7){w.push(wk);wk=[];}}if(wk.length){while(wk.length<7)wk.push(null);w.push(wk);}return w;},[yr,mo,dins,stDay]);
+
+  const filEntries=(y,m,d)=>{let e=ge(y,m,d);if(filterSt!=="All")e=e.filter(x=>x.status===filterSt);if(search)e=e.filter(x=>x.title.toLowerCase().includes(search.toLowerCase()));return e;};
+  const weekCts=weeks.map(w=>w.reduce((s,d)=>s+(d?filEntries(yr,mo,d).length:0),0));
+  const filledDays=useMemo(()=>{let c=0;for(let d=1;d<=dins;d++)if(ge(yr,mo,d).length>0)c++;return c;},[entries,yr,mo,dins]);
+  const prog=Math.round((filledDays/dins)*100);
+
+  const daysUntil=(y,m,d)=>{const t2=new Date(y,m,d);const diff=Math.ceil((t2-today)/864e5);return diff;};
+
+  const prev=()=>{if(mo===0){setMo(11);setYr(yr-1);}else setMo(mo-1);};
+  const next=()=>{if(mo===11){setMo(0);setYr(yr+1);}else setMo(mo+1);};
+
+  const hCtx=(e,day,entry=null)=>{e.preventDefault();e.stopPropagation();setCtx({x:e.clientX,y:e.clientY,day,entry});};
+  const hDrop=(y,m,d)=>{if(drag){moveEntry(drag.fk,dk(y,m,d),drag.id);setDrag(null);}};
+
+  const CtxM=()=>{if(!ctx)return null;const its=[];its.push({l:"➕ New Entry",a:()=>{setModal({type:"new",day:ctx.day});setCtx(null);}});if(ctx.entry){its.push({l:"✏️ Edit Entry",a:()=>{setModal({type:"edit",day:ctx.day,entry:ctx.entry});setCtx(null);}});its.push({l:"🗑️ Remove Entry",a:()=>{removeEntry(yr,mo,ctx.day,ctx.entry.id);setCtx(null);}});EMOJIS.forEach(em=>{const has=(ctx.entry.reactions||[]).includes(em);its.push({l:`${has?"Remove":"Add"} ${em}`,a:()=>{toggleEmoji(yr,mo,ctx.day,ctx.entry.id,em);setCtx(null);}});});}
+    return(<div ref={cRef} style={{position:"fixed",left:ctx.x,top:ctx.y,zIndex:1000,background:t.ctB,border:`1px solid ${t.ctD}`,borderRadius:10,boxShadow:`0 8px 30px ${t.sh}`,padding:6,minWidth:180}}>{its.map((it,i)=><div key={i} onClick={it.a} style={{padding:"9px 14px",cursor:"pointer",borderRadius:7,fontSize:14,color:t.tx,transition:"background .15s"}} onMouseEnter={e=>e.target.style.background=t.ctH} onMouseLeave={e=>e.target.style.background="transparent"}>{it.l}</div>)}</div>);
+  };
+
+  const Mdl=()=>{if(!modal)return null;const isE=modal.type==="edit";
+    const[ti,sTi]=useState(isE?modal.entry.title:"");
+    const[no,sNo]=useState(isE?modal.entry.notes||"":"");
+    const[st,sSt]=useState(isE?modal.entry.status:"Draft");
+    const[rc,sRc]=useState(isE?modal.entry.recurrence||"None":"None");
+    const save=()=>{if(!ti.trim())return;if(isE)updateEntry(yr,mo,modal.day,modal.entry.id,{title:ti,notes:no,status:st,recurrence:rc});else addEntry(yr,mo,modal.day,{id:gid(),title:ti,notes:no,status:st,recurrence:rc,reactions:[]});setModal(null);};
+    return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000}} onClick={()=>setModal(null)}><div onClick={e=>e.stopPropagation()} style={{background:t.sf,borderRadius:16,padding:28,width:380,boxShadow:`0 20px 60px ${t.sh}`,border:`1px solid ${t.bd}`}}>
+      <h3 style={{margin:"0 0 20px",color:t.tx,fontSize:18}}>{isE?"Edit Entry":`New Entry — ${MONTHS[mo]} ${modal.day}`}</h3>
+      <input value={ti} onChange={e=>sTi(e.target.value)} placeholder="Title" autoFocus style={{width:"100%",padding:"10px 14px",borderRadius:10,border:`1px solid ${t.bd}`,background:t.sa,color:t.tx,fontSize:14,marginBottom:12,outline:"none",boxSizing:"border-box"}}/>
+      <textarea value={no} onChange={e=>sNo(e.target.value)} placeholder="Notes (optional)" rows={3} style={{width:"100%",padding:"10px 14px",borderRadius:10,border:`1px solid ${t.bd}`,background:t.sa,color:t.tx,fontSize:14,marginBottom:12,resize:"vertical",outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
+      <div style={{display:"flex",gap:12,marginBottom:12}}>
+        <div style={{flex:1}}><label style={{fontSize:12,color:t.ts,marginBottom:4,display:"block"}}>Status</label><select value={st} onChange={e=>sSt(e.target.value)} style={{width:"100%",padding:"8px 10px",borderRadius:8,border:`1px solid ${t.bd}`,background:t.sa,color:t.tx,fontSize:13}}>{STATUSES.map(s=><option key={s} value={s}>{ST_ICO[s]} {s}</option>)}</select></div>
+        <div style={{flex:1}}><label style={{fontSize:12,color:t.ts,marginBottom:4,display:"block"}}>Recurrence</label><select value={rc} onChange={e=>sRc(e.target.value)} style={{width:"100%",padding:"8px 10px",borderRadius:8,border:`1px solid ${t.bd}`,background:t.sa,color:t.tx,fontSize:13}}>{RECUR.map(r=><option key={r} value={r}>{r}</option>)}</select></div>
+      </div>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}>
+        <button onClick={()=>setModal(null)} style={{padding:"9px 20px",borderRadius:10,border:`1px solid ${t.bd}`,background:"transparent",color:t.ts,cursor:"pointer",fontSize:14}}>Cancel</button>
+        <button onClick={save} style={{padding:"9px 20px",borderRadius:10,border:"none",background:t.ac,color:"#fff",cursor:"pointer",fontSize:14,fontWeight:600}}>Save</button>
+      </div>
+    </div></div>);
+  };
+
+  const MiniCal=()=>{const ms=[];for(let i=-1;i<=4;i++){let mm=mo+i,yy=yr;if(mm<0){mm+=12;yy--;}else if(mm>11){mm-=12;yy++;}ms.push({m:mm,y:yy});}
+    return(<div style={{background:t.sf,borderRadius:14,padding:16,border:`1px solid ${t.bd}`,boxShadow:`0 2px 12px ${t.sh}`}}>
+      <div style={{fontSize:12,fontWeight:700,color:t.ts,marginBottom:10,textTransform:"uppercase",letterSpacing:1}}>Quick Nav</div>
+      <div style={{display:"flex",flexDirection:"column",gap:3}}>{ms.map(({m,y})=>{const a=m===mo&&y===yr;return(<div key={`${y}-${m}`} onClick={()=>{setMo(m);setYr(y);}} style={{padding:"7px 12px",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:a?700:400,background:a?t.ac:"transparent",color:a?"#fff":t.tx,transition:"all .15s"}} onMouseEnter={e=>{if(!a)e.target.style.background=t.mH;}} onMouseLeave={e=>{if(!a)e.target.style.background="transparent";}}>{MONTHS[m].slice(0,3)} {y}</div>);})}</div>
+    </div>);
+  };
+
+  return(
+    <div style={{minHeight:"100vh",background:t.bg,color:t.tx,fontFamily:"'Inter','Segoe UI',system-ui,sans-serif",transition:"all .3s"}}>
+      <div style={{maxWidth:1120,margin:"0 auto",padding:"20px 20px"}}>
+        {/* Header */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap",gap:12}}>
+          <div>
+            <h1 style={{margin:0,fontSize:26,fontWeight:800,color:t.ac}}>Jack's Content Calendar</h1>
+            <p style={{margin:"2px 0 0",fontSize:12,color:t.ts}}>Right-click any day or entry • Drag to reschedule • ➕ quick-add on each day</p>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            {undoStack.length>0&&<button onClick={undo} style={{padding:"8px 14px",borderRadius:10,border:`1px solid ${t.bd}`,background:t.sf,color:t.tx,cursor:"pointer",fontSize:13,fontWeight:600,boxShadow:`0 2px 8px ${t.sh}`}} title="Undo last action">↩️ Undo</button>}
+            <button onClick={()=>setDark(!dark)} style={{padding:"8px 16px",borderRadius:10,border:`1px solid ${t.bd}`,background:t.sf,color:t.tx,cursor:"pointer",fontSize:13,fontWeight:600,boxShadow:`0 2px 8px ${t.sh}`,display:"flex",alignItems:"center",gap:6}}>
+              {dark?"☀️ Light":"🌙 Dark"}
+            </button>
+          </div>
+        </div>
+
+        {/* Search & Filter Bar */}
+        <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search entries..." style={{flex:"1 1 200px",padding:"8px 14px",borderRadius:10,border:`1px solid ${t.bd}`,background:t.sf,color:t.tx,fontSize:13,outline:"none",minWidth:160}}/>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+            {["All",...STATUSES].map(s=><button key={s} onClick={()=>setFilterSt(s)} style={{padding:"6px 12px",borderRadius:8,border:`1px solid ${filterSt===s?t.ac:t.bd}`,background:filterSt===s?t.ac:"transparent",color:filterSt===s?"#fff":t.ts,cursor:"pointer",fontSize:12,fontWeight:600,transition:"all .15s"}}>{s==="All"?"All":ST_ICO[s]+" "+s}</button>)}
+          </div>
+        </div>
+
+        {/* Progress Bar */}
+        <div style={{marginBottom:16,background:t.sf,borderRadius:12,padding:"12px 18px",border:`1px solid ${t.bd}`,boxShadow:`0 2px 8px ${t.sh}`}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+            <span style={{fontSize:12,fontWeight:700,color:t.ts}}>Monthly Progress</span>
+            <span style={{fontSize:12,fontWeight:700,color:t.ac}}>{filledDays}/{dins} days filled ({prog}%)</span>
+          </div>
+          <div style={{height:8,borderRadius:4,background:t.prB,overflow:"hidden"}}>
+            <div style={{height:"100%",borderRadius:4,background:`linear-gradient(90deg, ${t.ac}, #a78bfa)`,width:`${prog}%`,transition:"width .4s"}}/>
+          </div>
+        </div>
+
+        <div style={{display:"flex",gap:16}}>
+          {/* Sidebar */}
+          <div style={{width:170,flexShrink:0}}>
+            <MiniCal/>
+            <div style={{marginTop:14,background:t.sf,borderRadius:14,padding:14,border:`1px solid ${t.bd}`,boxShadow:`0 2px 12px ${t.sh}`}}>
+              <div style={{fontSize:12,fontWeight:700,color:t.ts,marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Legend</div>
+              {STATUSES.map(s=><div key={s} style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
+                <span style={{...ss(s,t),padding:"2px 8px",borderRadius:6,fontSize:11,fontWeight:600}}>{ST_ICO[s]} {s}</span>
+              </div>)}
+              <div style={{borderTop:`1px solid ${t.bd}`,marginTop:8,paddingTop:8}}>
+                <div style={{fontSize:11,color:t.ts,marginBottom:4}}>Reactions</div>
+                {EMOJIS.map(e=><span key={e} style={{marginRight:6,fontSize:14}} title={e==="🔥"?"Priority":e==="⭐"?"Important":"Idea"}>{e}</span>)}
+              </div>
+              <div style={{borderTop:`1px solid ${t.bd}`,marginTop:8,paddingTop:8}}>
+                <div style={{fontSize:11,color:t.ts,marginBottom:4}}>Heatmap</div>
+                <div style={{display:"flex",gap:4}}>
+                  {[t.hm1,t.hm2,t.hm3,t.hm4].map((c,i)=><div key={i} style={{width:16,height:16,borderRadius:4,background:c,border:`1px solid ${t.bd}`}}/>)}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Main */}
+          <div style={{flex:1,minWidth:0}}>
+            {/* Month Nav */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,background:t.sf,borderRadius:14,padding:"10px 18px",border:`1px solid ${t.bd}`,boxShadow:`0 2px 12px ${t.sh}`}}>
+              <button onClick={prev} style={{width:34,height:34,borderRadius:10,border:`1px solid ${t.bd}`,background:"transparent",color:t.tx,cursor:"pointer",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center"}} onMouseEnter={e=>e.target.style.background=t.hv} onMouseLeave={e=>e.target.style.background="transparent"}>‹</button>
+              <span style={{fontSize:18,fontWeight:700}}>{MONTHS[mo]} {yr}</span>
+              <button onClick={next} style={{width:34,height:34,borderRadius:10,border:`1px solid ${t.bd}`,background:"transparent",color:t.tx,cursor:"pointer",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center"}} onMouseEnter={e=>e.target.style.background=t.hv} onMouseLeave={e=>e.target.style.background="transparent"}>›</button>
+            </div>
+
+            {/* Day Headers */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:2}}>
+              {DAYS_H.map(d=><div key={d} style={{textAlign:"center",padding:"6px 0",fontSize:11,fontWeight:700,color:t.ts,textTransform:"uppercase",letterSpacing:1}}>{d}</div>)}
+            </div>
+
+            {/* Calendar Grid */}
+            {weeks.map((wk,wi)=>(
+              <div key={wi}>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:2}} onMouseEnter={()=>setHovW(wi)} onMouseLeave={()=>setHovW(null)}>
+                  {wk.map((d,di)=>{
+                    const dayK=d?dk(yr,mo,d):null;
+                    const de=d?filEntries(yr,mo,d):[];
+                    const allE=d?ge(yr,mo,d):[];
+                    const td=d&&isT(d);
+                    const ihD=hovD===`${wi}-${di}`;
+                    const ihW=hovW===wi;
+                    const hm=hmBg(allE.length,t);
+                    const du=d?daysUntil(yr,mo,d):-1;
+                    return(
+                      <div key={di} onContextMenu={d?e=>hCtx(e,d):undefined} onMouseEnter={()=>d&&setHovD(`${wi}-${di}`)} onMouseLeave={()=>setHovD(null)} onDragOver={d?e=>e.preventDefault():undefined} onDrop={d?()=>hDrop(yr,mo,d):undefined}
+                        style={{minHeight:90,borderRadius:10,padding:6,background:td?(dark?"#1e1b4b":"#eef2ff"):ihD?t.hv:hm!=="transparent"?hm:ihW?t.sa:t.sf,border:`1.5px solid ${td?t.ac:ihD?t.ac:t.bd}`,transition:"all .15s",cursor:d?"default":"auto",opacity:d?1:0.25,transform:ihD?"scale(1.02)":"scale(1)",boxShadow:ihD?`0 4px 14px ${t.sh}`:"none",overflow:"hidden"}}>
+                        {d&&(<>
+                          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
+                            <span style={{width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:7,background:td?t.tB:"transparent",color:td?t.tT:t.tx,fontSize:12,fontWeight:700}}>{d}</span>
+                            <button onClick={()=>setModal({type:"new",day:d})} style={{width:20,height:20,borderRadius:6,border:"none",background:"transparent",color:t.ts,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",opacity:ihD?1:0,transition:"opacity .15s"}} title="Quick add">+</button>
+                          </div>
+                          {de.map(en=>{
+                            const cdBadge=en.status==="Scheduled"&&du>=0&&du<=7;
+                            return(
+                            <div key={en.id} draggable onDragStart={()=>setDrag({id:en.id,fk:dayK})} onDragEnd={()=>setDrag(null)} onContextMenu={e=>hCtx(e,d,en)} onMouseEnter={()=>setHovE(en.id)} onMouseLeave={()=>setHovE(null)} title={en.notes||en.title}
+                              style={{...ss(en.status,t),padding:"3px 6px",borderRadius:6,fontSize:10,fontWeight:600,marginBottom:2,cursor:"grab",display:"flex",alignItems:"center",gap:3,transition:"all .15s",transform:hovE===en.id?"scale(1.03)":"scale(1)",boxShadow:hovE===en.id?`0 2px 8px ${t.sh}`:"none"}}>
+                              <span style={{flexShrink:0}}>{ST_ICO[en.status]}</span>
+                              <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0,flex:1}}>{en.title}</span>
+                              {en.recurring&&<span style={{fontSize:8,flexShrink:0}}>🔁</span>}
+                              {(en.reactions||[]).length>0&&<span style={{fontSize:8,flexShrink:0}}>{(en.reactions||[]).join("")}</span>}
+                              {cdBadge&&<span style={{fontSize:8,flexShrink:0,background:"rgba(0,0,0,.15)",borderRadius:3,padding:"0 3px"}}>{du===0?"today":du===1?"tmrw":`${du}d`}</span>}
+                            </div>);
+                          })}
+                        </>)}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{background:hovW===wi?t.ac:t.wk,borderRadius:7,padding:"3px 14px",marginBottom:4,display:"flex",alignItems:"center",justifyContent:"space-between",transition:"all .2s"}}>
+                  <span style={{fontSize:10,fontWeight:600,color:hovW===wi?"#fff":t.ts}}>Week {wi+1}</span>
+                  <span style={{fontSize:10,fontWeight:700,color:hovW===wi?"#fff":t.ac}}>{weekCts[wi]} {weekCts[wi]===1?"entry":"entries"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <CtxM/>
+      <Mdl/>
+    </div>
+  );
+}
