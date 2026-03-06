@@ -53,6 +53,7 @@ var EMOJIS=["\ud83d\udd25","\u2b50","\ud83d\udca1"];
 var state={dark:false,yr:2026,mo:2,entries:{},search:"",filterSt:"All",undoStack:[],ctx:null,drag:null,mobileWeek:0,importMsg:"",sidebarOpen:false,confirmDel:null};
 
 function gid(){return Math.random().toString(36).slice(2,9)}
+function fmtDate(d){var day=d.getDate(),mon=MONTHS_S[d.getMonth()],yr=d.getFullYear(),h=d.getHours(),m=d.getMinutes();return day+" "+mon+" "+yr+" at "+String(h).padStart(2,"0")+":"+String(m).padStart(2,"0")}
 function dims(y,m){return new Date(y,m+1,0).getDate()}
 function startD(y,m){var d=new Date(y,m,1).getDay();return d===0?6:d-1}
 function dk(y,m,d){return y+"-"+m+"-"+d}
@@ -60,7 +61,7 @@ function ge(y,m,d){return state.entries[dk(y,m,d)]||[]}
 function snap(){state.undoStack=state.undoStack.slice(-19).concat([JSON.parse(JSON.stringify(state.entries))])}
 function undo(){if(!state.undoStack.length)return;state.entries=state.undoStack.pop();render()}
 
-function addEntryRaw(y,m,d,e){var k=dk(y,m,d);state.entries[k]=(state.entries[k]||[]).concat([e])}
+function addEntryRaw(y,m,d,e){var k=dk(y,m,d);if(!e.createdAt)e.createdAt=new Date().toISOString();if(!e.history)e.history=[];state.entries[k]=(state.entries[k]||[]).concat([e])}
 function addEntry(y,m,d,e){snap();addEntryRaw(y,m,d,e);expandR(y,m,d,e);render()}
 function expandR(y,m,d,e){
   if(e.recurrence==="None")return;
@@ -69,7 +70,19 @@ function expandR(y,m,d,e){
   if(iv>0){var dt=new Date(y,m,d);for(var i=0;i<52;i++){dt=new Date(dt.getTime()+iv*864e5);if(endDt&&dt>endDt)break;addEntryRaw(dt.getFullYear(),dt.getMonth(),dt.getDate(),Object.assign({},e,{id:gid(),recurring:true}))}}
   else if(e.recurrence==="Monthly"){for(var i=1;i<=12;i++){var nm=m+i,ny=y;if(nm>11){nm-=12;ny++}var nd=Math.min(d,dims(ny,nm));var chk=new Date(ny,nm,nd);if(endDt&&chk>endDt)break;addEntryRaw(ny,nm,nd,Object.assign({},e,{id:gid(),recurring:true}))}}
 }
-function updateEntry(y,m,d,id,u){snap();var k=dk(y,m,d);state.entries[k]=(state.entries[k]||[]).map(function(e){return e.id===id?Object.assign({},e,u):e});render()}
+function updateEntry(y,m,d,id,u){snap();var k=dk(y,m,d);state.entries[k]=(state.entries[k]||[]).map(function(e){
+  if(e.id!==id)return e;
+  var updated=Object.assign({},e,u);
+  if(!updated.history)updated.history=[];
+  var changes=[];
+  if(u.status&&u.status!==e.status)changes.push("Status: "+e.status+" \u2192 "+u.status);
+  if(u.title&&u.title!==e.title)changes.push("Title updated");
+  if(u.recurrence&&u.recurrence!==(e.recurrence||"None"))changes.push("Recurrence: "+(e.recurrence||"None")+" \u2192 "+u.recurrence);
+  if(u.notes!==undefined&&u.notes!==(e.notes||""))changes.push("Notes updated");
+  if(changes.length>0)updated.history=updated.history.concat([{date:new Date().toISOString(),changes:changes}]);
+  updated.lastEdited=new Date().toISOString();
+  return updated;
+});render()}
 function removeEntry(y,m,d,id){snap();var k=dk(y,m,d);state.entries[k]=(state.entries[k]||[]).filter(function(e){return e.id!==id});render()}
 function moveEntry(fk,tk,id){if(fk===tk)return;snap();var e=null;state.entries[fk]=(state.entries[fk]||[]).filter(function(x){if(x.id===id){e=x;return false}return true});if(e)state.entries[tk]=(state.entries[tk]||[]).concat([e]);render()}
 function toggleEmoji(y,m,d,id,em){var k=dk(y,m,d);state.entries[k]=(state.entries[k]||[]).map(function(e){if(e.id!==id)return e;var r=e.reactions||[];return Object.assign({},e,{reactions:r.indexOf(em)>=0?r.filter(function(x){return x!==em}):r.concat([em])})});render()}
@@ -126,23 +139,83 @@ function parseDate(str){
   return null;
 }
 
+function findCol(row,candidates){
+  for(var i=0;i<candidates.length;i++){
+    var c=candidates[i];
+    // exact match
+    if(row[c]!==undefined&&row[c]!=="")return row[c];
+  }
+  // fuzzy: check if any key contains candidate
+  var keys=Object.keys(row);
+  for(var i=0;i<candidates.length;i++){
+    for(var j=0;j<keys.length;j++){
+      if(keys[j].indexOf(candidates[i])>=0&&row[keys[j]]!=="")return row[keys[j]];
+    }
+  }
+  return "";
+}
+
 window.handleCSV=function(input){
   if(!input.files||!input.files[0])return;
   var reader=new FileReader();
   reader.onload=function(e){
-    try{var rows=parseCSV(e.target.result);if(!rows.length){state.importMsg="No data found";render();return}
-    var count=0;snap();
-    rows.forEach(function(r){
-      var name=r["name"]||r["task"]||r["task name"]||r["item"]||r["title"]||r["subject"]||"";
-      var dateStr=r["date"]||r["due date"]||r["due_date"]||r["deadline"]||r["start date"]||r["timeline"]||"";
-      var statusRaw=(r["status"]||r["state"]||"").toLowerCase();
-      var notes=r["notes"]||r["description"]||r["text"]||r["update"]||"";
-      if(!name||!dateStr)return;var dt=parseDate(dateStr.split(" - ")[0]);if(!dt)return;
-      var status="Draft";
-      if(statusRaw.indexOf("done")>=0||statusRaw.indexOf("complete")>=0||statusRaw.indexOf("publish")>=0)status="Published";
-      else if(statusRaw.indexOf("schedule")>=0||statusRaw.indexOf("working")>=0||statusRaw.indexOf("progress")>=0)status="Scheduled";
-      addEntryRaw(dt.getFullYear(),dt.getMonth(),dt.getDate(),{id:gid(),title:name,notes:notes,status:status,recurrence:"None",recurEnd:"",reactions:[]});count++});
-    state.importMsg="\u2705 Imported "+count+" tasks";render();setTimeout(function(){state.importMsg="";render()},4000);
+    try{
+      var text=e.target.result;
+      // Monday.com exports sometimes have BOM or extra header rows
+      text=text.replace(/^\uFEFF/,"");
+      var rows=parseCSV(text);
+      if(!rows.length){state.importMsg="No data found in CSV";render();return}
+
+      // Debug: log headers for troubleshooting
+      var hdrs=Object.keys(rows[0]);
+      console.log("CSV headers found:",hdrs);
+      console.log("First row:",rows[0]);
+
+      var count=0,skipped=0;snap();
+      rows.forEach(function(r){
+        var name=findCol(r,["name","task name","task","item","item name","title","subject","to-do","todo","content","headline","card name","pulse name"]);
+        var dateStr=findCol(r,["date","due date","due_date","deadline","start date","start_date","timeline","creation date","created","target date","publish date","delivery date","end date","date1"]);
+        var statusRaw=findCol(r,["status","state","stage","progress","phase","label","column status"]).toLowerCase();
+        var notes=findCol(r,["notes","description","text","update","details","comments","body","info","summary"]);
+        var group=findCol(r,["group","board","section","category","type","subitems"]);
+
+        if(!name){skipped++;return}
+
+        // Handle Monday.com timeline format "YYYY-MM-DD - YYYY-MM-DD"
+        if(dateStr.indexOf(" - ")>=0)dateStr=dateStr.split(" - ")[0];
+        // Handle "DD Mon YYYY" format
+        dateStr=dateStr.trim();
+
+        var dt=null;
+        if(dateStr)dt=parseDate(dateStr);
+
+        // If no date found, try any column that looks like a date
+        if(!dt){
+          var keys=Object.keys(r);
+          for(var k=0;k<keys.length;k++){
+            var v=r[keys[k]];
+            if(v&&v.match&&v.match(/\d{4}[-\/]\d{1,2}[-\/]\d{1,2}/)){dt=parseDate(v);if(dt)break}
+            if(v&&v.match&&v.match(/\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}/)){dt=parseDate(v);if(dt)break}
+          }
+        }
+
+        if(!dt){skipped++;return}
+
+        var status="Draft";
+        if(statusRaw.match(/done|complete|publish|live|approved|closed|finish/))status="Published";
+        else if(statusRaw.match(/schedule|working|progress|active|in review|review|pending|started/))status="Scheduled";
+        else if(statusRaw.match(/meeting|call|sync|standup|stand-up|catch up|catchup/))status="Meeting";
+
+        var fullNotes=notes;
+        if(group)fullNotes=(fullNotes?fullNotes+"\n":"")+"Group: "+group;
+
+        addEntryRaw(dt.getFullYear(),dt.getMonth(),dt.getDate(),{id:gid(),title:name,notes:fullNotes,status:status,recurrence:"None",recurEnd:"",reactions:[]});
+        count++;
+      });
+      var msg="\u2705 Imported "+count+" tasks";
+      if(skipped>0)msg+=" ("+skipped+" rows skipped \u2014 missing name or date)";
+      state.importMsg=msg;render();
+      setTimeout(function(){state.importMsg="";render()},6000);
     }catch(err){state.importMsg="\u274c Error: "+err.message;render()}};
   reader.readAsText(input.files[0]);input.value="";
 };
@@ -259,6 +332,8 @@ function render(){
   o+='<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">';
   o+='<button class="import-btn" onclick="document.getElementById(\'csvFile\').click()" style="padding:7px 14px;border-radius:10px;border:none;background:'+t.impBtn+';color:#fff;cursor:pointer;font-size:12px;font-weight:600">\ud83d\udce5 Import Monday.com</button>';
   o+='<button class="import-btn" onclick="document.getElementById(\'outlookFile\').click()" style="padding:7px 14px;border-radius:10px;border:none;background:#0078d4;color:#fff;cursor:pointer;font-size:12px;font-weight:600">\ud83d\udcc6 Import Outlook</button>';
+  o+='<button class="import-btn" onclick="openBulkAdd()" style="padding:7px 14px;border-radius:10px;border:none;background:#10b981;color:#fff;cursor:pointer;font-size:12px;font-weight:600">\ud83d\udccb Bulk Add</button>';
+  o+='<button class="import-btn" onclick="openWeeklyBrief()" style="padding:7px 14px;border-radius:10px;border:none;background:#f59e0b;color:#fff;cursor:pointer;font-size:12px;font-weight:600">\ud83d\udcca Weekly Brief</button>';
   if(state.importMsg)o+='<span style="font-size:12px;font-weight:600;color:'+t.ac+'">'+state.importMsg+"</span>";
   o+="</div>";
 
@@ -322,8 +397,8 @@ function render(){
       if(d){
         var ct=allE.length;
         o+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">';
-        o+='<span style="display:flex;align-items:center;gap:3px"><span style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:'+(td?t.tB:"transparent")+";color:"+(td?t.tT:t.tx)+';font-size:11px;font-weight:700">'+d+"</span>";
-        if(ct>0)o+='<span style="font-size:8px;font-weight:700;background:'+t.ac+';color:#fff;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center">'+ct+"</span>";
+        o+='<span style="display:flex;align-items:center;gap:3px"><span onclick="openDayDetail('+d+')" style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:'+(td?t.tB:"transparent")+";color:"+(td?t.tT:t.tx)+';font-size:11px;font-weight:700;cursor:pointer">'+d+"</span>";
+        if(ct>0)o+='<span onclick="openDayDetail('+d+')" style="font-size:8px;font-weight:700;background:'+t.ac+';color:#fff;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer">'+ct+"</span>";
         o+="</span>";
         o+='<button onclick="openModal(\'new\','+d+')" style="width:18px;height:18px;border-radius:5px;border:none;background:'+t.ac+';color:#fff;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center">+</button>';
         o+="</div>";
@@ -355,8 +430,8 @@ function render(){
         if(d){
           var ct=allE.length;
           o+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">';
-          o+='<span style="display:flex;align-items:center;gap:3px"><span style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:7px;background:'+(td?t.tB:"transparent")+";color:"+(td?t.tT:t.tx)+';font-size:12px;font-weight:700">'+d+"</span>";
-          if(ct>0)o+='<span style="font-size:8px;font-weight:700;background:'+t.ac+';color:#fff;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center">'+ct+"</span>";
+          o+='<span style="display:flex;align-items:center;gap:3px"><span onclick="openDayDetail('+d+')" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:7px;background:'+(td?t.tB:"transparent")+";color:"+(td?t.tT:t.tx)+';font-size:12px;font-weight:700;cursor:pointer">'+d+"</span>";
+          if(ct>0)o+='<span onclick="openDayDetail('+d+')" style="font-size:8px;font-weight:700;background:'+t.ac+';color:#fff;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer">'+ct+"</span>";
           o+="</span>";
           o+='<button class="qa-btn" onclick="openModal(\'new\','+d+')" style="width:20px;height:20px;border-radius:6px;border:none;background:transparent;color:'+t.ts+';cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center">+</button>';
           o+="</div>";
@@ -374,7 +449,183 @@ function render(){
 
   o+="</div></div></div></div>";
 
-  // Delete confirmation overlay
+  // Day Detail Modal
+window.openDayDetail=function(day){
+  hideModal();var t=getTheme();
+  var allE=ge(state.yr,state.mo,day);
+  modOv=document.createElement("div");modOv.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px";modOv.onclick=hideModal;
+  var b=document.createElement("div");b.style.cssText="background:"+t.sf+";border-radius:16px;padding:24px;width:100%;max-width:460px;box-shadow:0 20px 60px "+t.sh+";border:1px solid "+t.bd+";max-height:85vh;overflow-y:auto";b.onclick=function(e){e.stopPropagation()};
+  var html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html+='<h3 style="margin:0;color:'+t.tx+';font-size:17px">\ud83d\udcc5 '+MONTHS[state.mo]+" "+day+", "+state.yr+"</h3>";
+  html+='<span style="font-size:12px;font-weight:600;color:'+t.ts+'">'+allE.length+(allE.length===1?" entry":" entries")+"</span></div>";
+  if(allE.length===0){
+    html+='<div style="text-align:center;padding:30px 0;color:'+t.ts+'"><div style="font-size:36px;margin-bottom:8px">\ud83d\udcad</div><p style="font-size:13px">No entries for this day</p></div>';
+  } else {
+    allE.forEach(function(en){
+      html+='<div style="background:'+t.sa+";border:1px solid "+t.bd+';border-radius:10px;padding:12px;margin-bottom:8px">';
+      html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">';
+      html+='<span style="font-size:14px;font-weight:700;color:'+t.tx+'">'+en.title+"</span>";
+      html+='<div style="display:flex;gap:4px;align-items:center">';
+      if(en.recurring)html+='<span style="font-size:11px" title="Recurring">\ud83d\udd01</span>';
+      if((en.reactions||[]).length>0)html+='<span style="font-size:11px">'+(en.reactions||[]).join("")+"</span>";
+      html+="</div></div>";
+      html+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:'+(en.notes?"6":"0")+'px">';
+      html+='<span style="'+ss(en.status,t)+';padding:2px 8px;border-radius:6px;font-size:10px;font-weight:600">'+ST_ICO[en.status]+" "+en.status+"</span>";
+      if(en.recurrence&&en.recurrence!=="None")html+='<span style="font-size:10px;color:'+t.ts+';background:'+t.sf+';padding:2px 6px;border-radius:4px;border:1px solid '+t.bd+'">'+en.recurrence+(en.recurEnd?" until "+en.recurEnd:"")+"</span>";
+      html+="</div>";
+      if(en.notes)html+='<p style="margin:0 0 4px;font-size:12px;color:'+t.ts+';line-height:1.5;white-space:pre-wrap">'+en.notes+"</p>";
+      // Timestamps & history
+      var tsHtml="";
+      if(en.createdAt){var cd=new Date(en.createdAt);tsHtml+='<div style="font-size:10px;color:'+t.ts+'">Created: '+fmtDate(cd)+"</div>"}
+      if(en.lastEdited){var ld=new Date(en.lastEdited);tsHtml+='<div style="font-size:10px;color:'+t.ts+'">Last edited: '+fmtDate(ld)+"</div>"}
+      if((en.history||[]).length>0){
+        tsHtml+='<div style="margin-top:4px">';
+        en.history.slice(-5).reverse().forEach(function(h){
+          var hd=new Date(h.date);
+          tsHtml+='<div style="font-size:10px;color:'+t.ts+';padding:2px 0;border-bottom:1px solid '+(state.dark?"rgba(255,255,255,.04)":"rgba(0,0,0,.04)")+'">';
+          tsHtml+='<span style="color:'+t.ac+';font-weight:600">'+fmtDate(hd)+"</span> \u2014 ";
+          tsHtml+=h.changes.join(", ");
+          tsHtml+="</div>";
+        });
+        tsHtml+="</div>";
+      }
+      if(tsHtml)html+='<div style="margin-top:6px;padding-top:6px;border-top:1px solid '+t.bd+'">'+tsHtml+"</div>";
+      html+='<div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end">';
+      html+='<button onclick="hideModal();triggerEdit('+day+',\''+en.id+'\')" style="padding:4px 10px;border-radius:6px;border:1px solid '+t.bd+";background:transparent;color:"+t.ts+';cursor:pointer;font-size:11px">\u270f\ufe0f Edit</button>';
+      html+='<button onclick="hideModal();triggerDel('+state.yr+","+state.mo+","+day+',\''+en.id+"','"+en.title.replace(/'/g,"\\'").replace(/"/g,"")+'\')" style="padding:4px 10px;border-radius:6px;border:1px solid '+t.bd+";background:transparent;color:#ef4444;cursor:pointer;font-size:11px\">\ud83d\uddd1\ufe0f Remove</button>";
+      html+="</div></div>";
+    });
+  }
+  html+='<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">';
+  html+='<button onclick="hideModal();openModal(\'new\','+day+')" style="padding:9px 18px;border-radius:10px;border:none;background:#10b981;color:#fff;cursor:pointer;font-size:13px;font-weight:600">\u2795 Add Entry</button>';
+  html+='<button id="dd_close" style="padding:9px 18px;border-radius:10px;border:none;background:'+t.ac+';color:#fff;cursor:pointer;font-size:13px;font-weight:600">Close</button></div>';
+  b.innerHTML=html;modOv.appendChild(b);document.body.appendChild(modOv);
+  document.getElementById("dd_close").onclick=hideModal;
+};
+
+// Edit from day detail
+openModalEdit=function(day,entry){
+  if(typeof entry==="string"){try{entry=JSON.parse(entry)}catch(e){return}}
+  showModalUI("edit",day,entry);
+};
+
+window.triggerDel=function(yr,mo,day,id,title){
+  state.confirmDel={yr:yr,mo:mo,day:day,id:id,title:title};render();
+};
+window.triggerEdit=function(day,id){
+  var k=dk(state.yr,state.mo,day);
+  var en=(state.entries[k]||[]).filter(function(x){return x.id===id})[0];
+  if(en)openModalEdit(day,en);
+};
+
+// Bulk Add Modal
+window.openBulkAdd=function(){
+  hideModal();var t=getTheme();
+  modOv=document.createElement("div");modOv.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px";modOv.onclick=hideModal;
+  var b=document.createElement("div");b.style.cssText="background:"+t.sf+";border-radius:16px;padding:24px;width:100%;max-width:440px;box-shadow:0 20px 60px "+t.sh+";border:1px solid "+t.bd+";max-height:90vh;overflow-y:auto";b.onclick=function(e){e.stopPropagation()};
+  b.innerHTML='<h3 style="margin:0 0 6px;color:'+t.tx+';font-size:17px">\ud83d\udccb Bulk Add Entries</h3>'
+    +'<p style="margin:0 0 14px;font-size:12px;color:'+t.ts+'">Add one task per line. All tasks will be added to the selected day with the chosen status and recurrence.</p>'
+    +'<textarea id="ba_titles" placeholder="Blog post: Client A quarterly review\nSocial media: Client A Instagram\nVideo script: Client A product demo\nNewsletter: Client A March update" rows="6" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid '+t.bd+";background:"+t.sa+";color:"+t.tx+';font-size:13px;margin-bottom:10px;resize:vertical;outline:none;font-family:inherit;box-sizing:border-box"></textarea>'
+    +'<div style="display:flex;gap:10px;margin-bottom:10px">'
+    +'<div style="flex:1"><label style="font-size:11px;color:'+t.ts+';display:block;margin-bottom:3px">Day</label><select id="ba_day" style="width:100%;padding:8px;border-radius:8px;border:1px solid '+t.bd+";background:"+t.sa+";color:"+t.tx+';font-size:13px">'+Array.from({length:dims(state.yr,state.mo)},function(_,i){return'<option value="'+(i+1)+'">'+(i+1)+"</option>"}).join("")+"</select></div>"
+    +'<div style="flex:1"><label style="font-size:11px;color:'+t.ts+';display:block;margin-bottom:3px">Status</label><select id="ba_st" style="width:100%;padding:8px;border-radius:8px;border:1px solid '+t.bd+";background:"+t.sa+";color:"+t.tx+';font-size:13px">'+STATUSES.map(function(s){return'<option value="'+s+'">'+ST_ICO[s]+" "+s+"</option>"}).join("")+"</select></div></div>"
+    +'<div style="display:flex;gap:10px;margin-bottom:10px">'
+    +'<div style="flex:1"><label style="font-size:11px;color:'+t.ts+';display:block;margin-bottom:3px">Recurrence</label><select id="ba_rc" onchange="toggleBaEnd()" style="width:100%;padding:8px;border-radius:8px;border:1px solid '+t.bd+";background:"+t.sa+";color:"+t.tx+';font-size:13px">'+RECUR.map(function(r){return'<option value="'+r+'">'+r+"</option>"}).join("")+"</select></div>"
+    +'<div id="ba_end_wrap" style="flex:1;display:none"><label style="font-size:11px;color:'+t.ts+';display:block;margin-bottom:3px">End Date</label><input id="ba_re" type="date" style="width:100%;padding:8px;border-radius:8px;border:1px solid '+t.bd+";background:"+t.sa+";color:"+t.tx+';font-size:13px;box-sizing:border-box"/></div></div>'
+    +'<div style="display:flex;gap:8px;justify-content:flex-end">'
+    +'<button id="ba_cn" style="padding:9px 18px;border-radius:10px;border:1px solid '+t.bd+";background:transparent;color:"+t.ts+';cursor:pointer;font-size:14px">Cancel</button>'
+    +'<button id="ba_sv" style="padding:9px 18px;border-radius:10px;border:none;background:#10b981;color:#fff;cursor:pointer;font-size:14px;font-weight:600">Add All</button></div>';
+  modOv.appendChild(b);document.body.appendChild(modOv);
+  document.getElementById("ba_cn").onclick=hideModal;
+  document.getElementById("ba_sv").onclick=function(){
+    var lines=document.getElementById("ba_titles").value.split("\n").map(function(l){return l.trim()}).filter(function(l){return l.length>0});
+    if(!lines.length)return;
+    var day=parseInt(document.getElementById("ba_day").value);
+    var st=document.getElementById("ba_st").value;
+    var rc=document.getElementById("ba_rc").value;
+    var re=document.getElementById("ba_re")?document.getElementById("ba_re").value||"":"";
+    snap();
+    lines.forEach(function(title){
+      var entry={id:gid(),title:title,notes:"",status:st,recurrence:rc,recurEnd:re,reactions:[]};
+      addEntryRaw(state.yr,state.mo,day,entry);
+      expandR(state.yr,state.mo,day,entry);
+    });
+    state.importMsg="\u2705 Added "+lines.length+" entries to "+MONTHS[state.mo]+" "+day;
+    hideModal();render();
+    setTimeout(function(){state.importMsg="";render()},4000);
+  };
+};
+window.toggleBaEnd=function(){
+  var rc=document.getElementById("ba_rc").value;
+  var w=document.getElementById("ba_end_wrap");
+  if(w)w.style.display=rc==="None"?"none":"block";
+};
+
+// Weekly Brief Modal
+window.openWeeklyBrief=function(){
+  hideModal();var t=getTheme();
+  var today=new Date();
+  var todayDay=today.getDay();var mondayOff=todayDay===0?-6:1-todayDay;
+  var monday=new Date(today);monday.setDate(today.getDate()+mondayOff);
+
+  var weekEntries=[];
+  for(var i=0;i<7;i++){
+    var d=new Date(monday);d.setDate(monday.getDate()+i);
+    var ents=ge(d.getFullYear(),d.getMonth(),d.getDate());
+    ents.forEach(function(en){weekEntries.push({entry:en,date:d,dayName:DAYS_H[i],dayNum:d.getDate(),month:MONTHS_S[d.getMonth()],daysAway:i})});
+  }
+
+  // Sort: prioritize by urgency (today first, then tomorrow, etc.) and by status
+  weekEntries.sort(function(a,b){
+    if(a.daysAway!==b.daysAway)return a.daysAway-b.daysAway;
+    return(ST_ORDER[a.entry.status]||9)-(ST_ORDER[b.entry.status]||9);
+  });
+
+  var urgent=weekEntries.filter(function(e){return e.daysAway<=1});
+  var upcoming=weekEntries.filter(function(e){return e.daysAway>1});
+
+  modOv=document.createElement("div");modOv.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px";modOv.onclick=hideModal;
+  var b=document.createElement("div");b.style.cssText="background:"+t.sf+";border-radius:16px;padding:24px;width:100%;max-width:440px;box-shadow:0 20px 60px "+t.sh+";border:1px solid "+t.bd+";max-height:85vh;overflow-y:auto";b.onclick=function(e){e.stopPropagation()};
+
+  var html='<h3 style="margin:0 0 4px;color:'+t.tx+';font-size:17px">\ud83d\udcca Weekly Brief</h3>';
+  html+='<p style="margin:0 0 16px;font-size:12px;color:'+t.ts+'">Week of '+monday.getDate()+" "+MONTHS_S[monday.getMonth()]+" "+monday.getFullYear()+" \u2022 "+weekEntries.length+" total entries</p>";
+
+  if(weekEntries.length===0){
+    html+='<div style="text-align:center;padding:30px 0;color:'+t.ts+'"><div style="font-size:40px;margin-bottom:10px">\ud83c\udf89</div><p style="font-size:14px">Nothing scheduled this week!</p></div>';
+  } else {
+    if(urgent.length>0){
+      html+='<div style="background:'+(state.dark?"#3b1818":"#fef2f2")+';border:1px solid '+(state.dark?"#7f1d1d":"#fecaca")+';border-radius:10px;padding:12px;margin-bottom:12px">';
+      html+='<div style="font-size:12px;font-weight:700;color:'+(state.dark?"#fca5a5":"#dc2626")+';margin-bottom:8px">\ud83d\udd25 PRIORITY \u2014 Today & Tomorrow ('+urgent.length+')</div>';
+      urgent.forEach(function(e){
+        html+='<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid '+(state.dark?"rgba(255,255,255,.06)":"rgba(0,0,0,.06)")+'">';
+        html+='<span style="'+ss(e.entry.status,t)+';padding:2px 6px;border-radius:5px;font-size:10px;font-weight:600;white-space:nowrap">'+ST_ICO[e.entry.status]+" "+e.entry.status+"</span>";
+        html+='<span style="font-size:12px;font-weight:600;color:'+t.tx+';flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+e.entry.title+"</span>";
+        html+='<span style="font-size:10px;color:'+t.ts+';white-space:nowrap">'+e.dayName+" "+e.dayNum+"</span>";
+        html+="</div>";
+      });
+      html+="</div>";
+    }
+    if(upcoming.length>0){
+      html+='<div style="background:'+t.sa+';border:1px solid '+t.bd+';border-radius:10px;padding:12px">';
+      html+='<div style="font-size:12px;font-weight:700;color:'+t.ac+';margin-bottom:8px">\ud83d\udcc5 LATER THIS WEEK ('+upcoming.length+')</div>';
+      upcoming.forEach(function(e){
+        html+='<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid '+(state.dark?"rgba(255,255,255,.06)":"rgba(0,0,0,.06)")+'">';
+        html+='<span style="'+ss(e.entry.status,t)+';padding:2px 6px;border-radius:5px;font-size:10px;font-weight:600;white-space:nowrap">'+ST_ICO[e.entry.status]+" "+e.entry.status+"</span>";
+        html+='<span style="font-size:12px;font-weight:600;color:'+t.tx+';flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+e.entry.title+"</span>";
+        html+='<span style="font-size:10px;color:'+t.ts+';white-space:nowrap">'+e.dayName+" "+e.dayNum+"</span>";
+        html+="</div>";
+      });
+      html+="</div>";
+    }
+  }
+
+  html+='<div style="display:flex;justify-content:flex-end;margin-top:14px"><button id="wb_close" style="padding:9px 20px;border-radius:10px;border:none;background:'+t.ac+';color:#fff;cursor:pointer;font-size:14px;font-weight:600">Close</button></div>';
+  b.innerHTML=html;
+  modOv.appendChild(b);document.body.appendChild(modOv);
+  document.getElementById("wb_close").onclick=hideModal;
+};
+
+// Delete confirmation overlay
   if(state.confirmDel){
     var cd=state.confirmDel;
     o+='<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:3000;padding:16px">';
@@ -491,7 +742,7 @@ window.nextWeek=function(){var w=getWeeks();if(state.mobileWeek<w.length-1){stat
 window.doSearch=function(v){state.search=v;render();var el=document.getElementById("searchBox");if(el){el.focus();el.setSelectionRange(v.length,v.length)}};
 window.setFilter=function(v){state.filterSt=v;render()};
 window.showCtx=showCtx;window.showCtxEntry=showCtxEntry;
-window.openModal=openModal;
+window.openModal=openModal;window.hideModal=hideModal;window.openModalEdit=openModalEdit;
 window.startDrag=startDrag;window.endDrag=endDrag;window.doDrop=doDrop;
 
 window.addEventListener("resize",render);
